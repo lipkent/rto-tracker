@@ -30,7 +30,7 @@ def _setup_logging(verbose: bool):
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.pass_context
 def cli(ctx, verbose):
-    """Office Attendance (RTO) Tracker."""
+    """RTO Tracker."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     _setup_logging(verbose)
