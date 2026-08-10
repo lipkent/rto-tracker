@@ -31,30 +31,42 @@ def _backfill_pending_days():
     On startup, mark any past working days still sitting at 'pending' as wfh.
     Covers the case where the script was not running at 23:59 EOD.
     Does not overwrite WiFi-confirmed office days or manual overrides.
+
+    Scans the current calendar month AND the immediately-preceding one (not
+    just current_month_block_for's single block) — otherwise a day left
+    pending right at a month's end gets permanently orphaned the moment the
+    calendar rolls into the next month, since every later run would only
+    ever look at the new current month again.
     """
     cfg = load_config()
     country = cfg["country"]
     today = date.today()
-    year, month = current_month_block_for(today)
-    block = build_month_block(year, month, country)
+
+    year, month = today.year, today.month
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
 
     backfilled = 0
-    for d in block.working_days:
-        if d >= today:
-            continue
-        if is_public_holiday(d, country):
-            continue
-        day = get_day(d)
-        if day.get("marked_office") or day.get("manually_set"):
-            continue
-        status = day.get("status")
-        if status == STATUS_PENDING or not status:
-            mark_wfh(d)
-            log.info("Backfilled pending day %s → wfh", d)
-            backfilled += 1
+    for y, m in [(prev_year, prev_month), (year, month)]:
+        block = build_month_block(y, m, country)
+        for d in block.working_days:
+            if d >= today:
+                continue
+            if is_public_holiday(d, country):
+                continue
+            day = get_day(d)
+            if day.get("marked_office") or day.get("manually_set"):
+                continue
+            status = day.get("status")
+            if status == STATUS_PENDING or not status:
+                mark_wfh(d)
+                log.info("Backfilled pending day %s → wfh", d)
+                backfilled += 1
 
     if backfilled:
-        log.info("Backfilled %d pending day(s) → wfh on startup", backfilled)
+        log.info("Backfilled %d pending day(s) → wfh", backfilled)
 
 
 def _run_calendar_sync():

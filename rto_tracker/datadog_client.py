@@ -2,7 +2,7 @@
 
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 
 from .calculations import MonthMetrics, calculate_month, current_month_block_for
 from .config import load_config
@@ -44,8 +44,15 @@ def _build_series(name: str, value: float, tags: list[str]) -> dict:
     }
 
 
-def push_metrics(month_metrics: MonthMetrics | None = None):
-    """Push all 13 RTO metrics to Datadog.  Calculates current month if not provided."""
+def push_metrics(month_metrics: MonthMetrics | None = None, update_sheet: bool = True):
+    """Push all 14 RTO metrics to Datadog.  Calculates current month if not provided.
+
+    update_sheet: pass False when pushing a month block that does not contain
+    today (e.g. the previous-month catch-up in push_all_months) — that call's
+    wifi_minutes_today would be 0 (today isn't in that block), and update_sheet()
+    rebuilds every row for the whole year, so it would clobber today's correct
+    WiFi value that the current-month call already wrote.
+    """
     cfg = load_config()
     api_key = cfg.get("datadog_api_key", "")
     if not api_key:
@@ -90,23 +97,26 @@ def push_metrics(month_metrics: MonthMetrics | None = None):
         return
 
     # ── Update Google Sheet ───────────────────────────────────────────────────
-    try:
-        from .gdrive_export import update_sheet
-        update_sheet(today_wifi_minutes=m.wifi_minutes_today)
-    except Exception as e:
-        log.warning("Google Sheet update skipped: %s", e)
+    if update_sheet:
+        try:
+            from .gdrive_export import update_sheet as _update_sheet
+            _update_sheet(today_wifi_minutes=m.wifi_minutes_today)
+        except Exception as e:
+            log.warning("Google Sheet update skipped: %s", e)
 
 
 def push_all_months():
     """Recalculate and push metrics for the current month and, if needed, the previous one."""
     today = date.today()
     year, month = current_month_block_for(today)
-    push_metrics(calculate_month(year, month, today))
+    push_metrics(calculate_month(year, month, today))   # contains today — updates the Sheet
 
-    # Also push previous month if we're in the first week (split-week spillover)
+    # Also push previous month if we're in the first week (split-week spillover).
+    # update_sheet=False: this block doesn't contain today, so its wifi_minutes_today
+    # would be 0 and would overwrite today's correct value in the Sheet.
     if today.day <= 7:
-        prev = date(year, month, 1) - __import__("datetime").timedelta(days=1)
-        push_metrics(calculate_month(prev.year, prev.month, today))
+        prev = date(year, month, 1) - timedelta(days=1)
+        push_metrics(calculate_month(prev.year, prev.month, today), update_sheet=False)
 
 
 def update_dashboard_month_filter():
