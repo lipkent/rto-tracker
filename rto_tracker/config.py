@@ -50,6 +50,7 @@ COUNTRY_OPTIONS = {
     "JP": {"name": "Japan", "timezone": "Asia/Tokyo"},
     "SG": {"name": "Singapore", "timezone": "Asia/Singapore"},
     "IN": {"name": "India", "timezone": "Asia/Kolkata"},
+    "IE": {"name": "Ireland", "timezone": "Europe/Dublin"},
 }
 
 
