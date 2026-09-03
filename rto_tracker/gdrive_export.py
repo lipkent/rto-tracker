@@ -53,7 +53,6 @@ _COL_HDR_TEXT = {"red": 1.00, "green": 1.00, "blue": 1.00}   # white text for pu
 _cached_sheets_service = None
 _cached_drive_service = None
 _cached_credentials = None
-_last_service_build_time = None
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -62,21 +61,14 @@ def _build_services():
 
     Service objects are cached to avoid recreating them on every call.
     Cached services are returned if credentials are still valid.
-    Periodically rebuilt (~1h) to clean up internal state and prevent memory accumulation.
     """
-    global _cached_sheets_service, _cached_drive_service, _cached_credentials, _last_service_build_time
+    global _cached_sheets_service, _cached_drive_service, _cached_credentials
 
-    import time as _time
-    now = _time.time()
-    rebuild_interval = 3600  # Rebuild every 1 hour to clean up internal state
-
-    # Return cached if credentials valid AND less than 1 hour old
-    if (_cached_credentials and _cached_credentials.valid and
-        _last_service_build_time and (now - _last_service_build_time) < rebuild_interval):
+    if _cached_credentials and _cached_credentials.valid:
         log.info("🔄 Sheets/Drive services cache hit")
         return _cached_sheets_service, _cached_drive_service
 
-    log.info("🆕 Sheets/Drive services cache miss — rebuilding (credentials invalid or periodic cleanup)")
+    log.info("🆕 Sheets/Drive services cache miss — rebuilding")
 
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
@@ -103,11 +95,9 @@ def _build_services():
         with open(_TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
 
-    import time as _time
     _cached_credentials = creds
     _cached_sheets_service = build("sheets", "v4", credentials=creds)
     _cached_drive_service = build("drive", "v3", credentials=creds)
-    _last_service_build_time = _time.time()
     return _cached_sheets_service, _cached_drive_service
 
 

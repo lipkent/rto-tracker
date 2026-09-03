@@ -19,7 +19,6 @@ _GCAL_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 _cached_service = None
 _cached_credentials = None
-_last_service_build_time = None
 
 
 def _build_service():
@@ -27,21 +26,14 @@ def _build_service():
 
     Service objects are cached to avoid recreating them on every call.
     Cached service is returned if credentials are still valid.
-    Periodically rebuilt (~1h) to clean up internal state and prevent memory accumulation.
     """
-    global _cached_service, _cached_credentials, _last_service_build_time
+    global _cached_service, _cached_credentials
 
-    import time as _time
-    now = _time.time()
-    rebuild_interval = 3600  # Rebuild every 1 hour to clean up internal state
-
-    # Return cached if credentials valid AND less than 1 hour old
-    if (_cached_credentials and _cached_credentials.valid and
-        _last_service_build_time and (now - _last_service_build_time) < rebuild_interval):
+    if _cached_credentials and _cached_credentials.valid:
         log.info("🔄 Calendar service cache hit")
         return _cached_service
 
-    log.info("🆕 Calendar service cache miss — rebuilding (credentials invalid or periodic cleanup)")
+    log.info("🆕 Calendar service cache miss — rebuilding")
 
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
@@ -68,11 +60,8 @@ def _build_service():
         with open(GCAL_TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
 
-    import time as _time
     _cached_credentials = creds
     _cached_service = build("calendar", "v3", credentials=creds)
-    _last_service_build_time = _time.time()
-    log.info("🆕 Calendar service rebuilt (credentials refreshed/re-authenticated)")
     return _cached_service
 
 
