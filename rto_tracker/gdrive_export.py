@@ -50,11 +50,23 @@ _COL_OUT      = {"red": 0.95, "green": 0.88, "blue": 0.88}   # light red
 _COL_WHITE    = {"red": 1.00, "green": 1.00, "blue": 1.00}
 _COL_HDR_TEXT = {"red": 1.00, "green": 1.00, "blue": 1.00}   # white text for purple header
 
+_cached_sheets_service = None
+_cached_drive_service = None
+_cached_credentials = None
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def _build_services():
-    """Return authenticated (sheets_service, drive_service) tuple."""
+    """Return authenticated (sheets_service, drive_service) tuple.
+
+    Service objects are cached to avoid recreating them on every call.
+    Cached services are returned if credentials are still valid.
+    """
+    global _cached_sheets_service, _cached_drive_service, _cached_credentials
+
+    if _cached_credentials and _cached_credentials.valid:
+        return _cached_sheets_service, _cached_drive_service
+
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -80,9 +92,10 @@ def _build_services():
         with open(_TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
 
-    sheets = build("sheets", "v4", credentials=creds)
-    drive  = build("drive",  "v3", credentials=creds)
-    return sheets, drive
+    _cached_credentials = creds
+    _cached_sheets_service = build("sheets", "v4", credentials=creds)
+    _cached_drive_service = build("drive", "v3", credentials=creds)
+    return _cached_sheets_service, _cached_drive_service
 
 
 # ── Spreadsheet helpers ───────────────────────────────────────────────────────
