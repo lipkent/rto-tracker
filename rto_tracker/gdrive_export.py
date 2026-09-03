@@ -19,7 +19,7 @@ from datetime import date
 
 from .config import GCAL_CREDENTIALS_FILE, CONFIG_DIR, load_config
 from .holidays_helper import is_public_holiday
-from .state import get_status, get_wifi_seconds, STATUS_OFFICE, STATUS_WFH, STATUS_OUT
+from .state import get_status, get_wifi_seconds, STATUS_OFFICE, STATUS_WFH, STATUS_OUT, load_state
 from .calculations import build_month_block, calculate_month
 
 log = logging.getLogger(__name__)
@@ -155,9 +155,18 @@ def _target_label(target_met: int) -> str:
     return {1: "✅ Met", 0: "❌ Not Met", 2: "⏳ Pending"}.get(target_met, "")
 
 
-def _build_year_rows(year: int, today: date, country: str, today_wifi_minutes: float | None = None) -> tuple[list[list], list[dict]]:
+def _get_day_from_state(state: dict, d: date) -> dict:
+    """Get day record from cached state dict (avoids repeated disk reads)."""
+    key = d.isoformat()
+    return state.get("days", {}).get(key, {})
+
+
+def _build_year_rows(year: int, today: date, country: str, state: dict, today_wifi_minutes: float | None = None) -> tuple[list[list], list[dict]]:
     """
-    Build all data rows for *year*.
+    Build all data rows for *year* using cached state dict.
+
+    Accepts pre-loaded state dict to avoid 250+ redundant disk reads per export.
+    Uses _get_day_from_state() to query status/wifi from cache instead of re-reading JSON.
 
     Layout per month:
       Summary row   ← always visible; +/- button appears here (controlBefore)
@@ -190,7 +199,7 @@ def _build_year_rows(year: int, today: date, country: str, today_wifi_minutes: f
         att_pct = f"{metrics.attendance_pct * 100:.1f}%"
         wfh_days = sum(
             1 for d in block.working_days
-            if get_status(d) == STATUS_WFH
+            if _get_day_from_state(state, d).get("status") == STATUS_WFH
         )
         rows.append([
             f"── {date(year, month, 1).strftime('%B %Y')} Summary ──",
@@ -208,13 +217,15 @@ def _build_year_rows(year: int, today: date, country: str, today_wifi_minutes: f
         group_start = len(rows)   # first daily row for this month (0-based)
 
         for d in block.working_days:
-            status = get_status(d) or ("pending" if d <= today else "")
+            day_record = _get_day_from_state(state, d)
+            status = day_record.get("status") or ("pending" if d <= today else "")
             if d == today and today_wifi_minutes is not None:
                 # Use the snapshotted value passed from push_metrics so the
                 # sheet always shows the exact same WiFi minutes as Datadog
                 wifi = round(today_wifi_minutes)
             else:
-                wifi = round(get_wifi_seconds(d) / 60) if d <= today else 0
+                wifi_seconds = day_record.get("wifi_seconds", 0)
+                wifi = round(wifi_seconds / 60) if d <= today else 0
             is_holiday = is_public_holiday(d, country)
 
             if is_holiday:
@@ -494,7 +505,9 @@ def update_sheet(today_wifi_minutes: float | None = None):
             ).execute()
             log.info("Reordered year sheet to index 0")
 
-        rows, month_groups = _build_year_rows(year, today, country, today_wifi_minutes)
+        # Load state ONCE instead of 250+ times during _build_year_rows
+        state = load_state()
+        rows, month_groups = _build_year_rows(year, today, country, state, today_wifi_minutes)
 
         # ── Write data (update in place — no clear step, no empty window) ──
         # values().update() from A1 always overwrites all existing cells.
