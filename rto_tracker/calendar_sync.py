@@ -30,10 +30,10 @@ def _build_service():
     global _cached_service, _cached_credentials
 
     if _cached_credentials and _cached_credentials.valid:
-        log.debug("Returning cached Calendar service (credentials valid)")
+        log.info("🔄 Calendar service cache hit")
         return _cached_service
 
-    log.debug("Building new Calendar service (cache miss or credentials invalid)")
+    log.info("🆕 Calendar service cache miss — rebuilding")
 
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials

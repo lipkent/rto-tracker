@@ -65,10 +65,10 @@ def _build_services():
     global _cached_sheets_service, _cached_drive_service, _cached_credentials
 
     if _cached_credentials and _cached_credentials.valid:
-        log.debug("Returning cached Sheets/Drive services (credentials valid)")
+        log.info("🔄 Sheets/Drive services cache hit")
         return _cached_sheets_service, _cached_drive_service
 
-    log.debug("Building new Sheets/Drive services (cache miss or credentials invalid)")
+    log.info("🆕 Sheets/Drive services cache miss — rebuilding")
 
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
