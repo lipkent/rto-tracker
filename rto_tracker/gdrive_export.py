@@ -193,7 +193,7 @@ def _build_year_rows(year: int, today: date, country: str, state: dict, today_wi
         if block.working_days[0] > today:
             break
 
-        metrics = calculate_month(year, month, today)
+        metrics = calculate_month(year, month, today, state=state)
 
         # ── Summary row FIRST (stays visible, hosts the +/- button) ──────────
         att_pct = f"{metrics.attendance_pct * 100:.1f}%"

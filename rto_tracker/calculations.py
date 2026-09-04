@@ -100,7 +100,29 @@ def build_month_block(year: int, month: int, country: str) -> MonthBlock:
     return MonthBlock(year=year, month=month, working_days=assigned)
 
 
-def calculate_month(year: int, month: int, today: Optional[date] = None) -> MonthMetrics:
+def _status_lookup(d: date, state: Optional[dict]) -> Optional[str]:
+    """Return day status from a pre-loaded state dict if provided, else read disk."""
+    if state is not None:
+        return state.get("days", {}).get(d.isoformat(), {}).get("status")
+    return get_status(d)
+
+
+def _wifi_seconds_lookup(d: date, state: Optional[dict]) -> int:
+    """Return wifi_seconds from a pre-loaded state dict if provided, else read disk."""
+    if state is not None:
+        return state.get("days", {}).get(d.isoformat(), {}).get("wifi_seconds", 0)
+    from .state import get_wifi_seconds
+    return get_wifi_seconds(d)
+
+
+def calculate_month(year: int, month: int, today: Optional[date] = None, state: Optional[dict] = None) -> MonthMetrics:
+    """
+    *state*: optional pre-loaded state dict (from state.load_state()) to avoid
+    re-reading state.json from disk for every working day. When omitted,
+    falls back to the original per-day get_status()/get_wifi_seconds() disk
+    reads — used by CLI commands (status/report/push/export) that call this
+    without a cached state.
+    """
     cfg = load_config()
     country = cfg["country"]
     rto_target = cfg["rto_target_pct"]
@@ -123,7 +145,7 @@ def calculate_month(year: int, month: int, today: Optional[date] = None) -> Mont
 
         base_working_days += 1
 
-        status = get_status(d)
+        status = _status_lookup(d, state)
 
         if status == STATUS_OUT:
             regular_out_days += 1
@@ -158,7 +180,7 @@ def calculate_month(year: int, month: int, today: Optional[date] = None) -> Mont
     # Today's daily metrics — use block membership instead of month number so
     # split-week days (e.g. June 29 assigned to July's block) are handled correctly.
     is_current_block = today in block.working_days
-    today_status = get_status(today) if is_current_block else None
+    today_status = _status_lookup(today, state) if is_current_block else None
     status_today_map = {
         STATUS_OFFICE: 1,
         STATUS_WFH: 0,
@@ -169,13 +191,12 @@ def calculate_month(year: int, month: int, today: Optional[date] = None) -> Mont
     status_today = status_today_map.get(today_status, 3)
     in_office_today = 1 if today_status == STATUS_OFFICE else 0
 
-    from .state import get_wifi_seconds
-    wifi_seconds = get_wifi_seconds(today) if is_current_block else 0
+    wifi_seconds = _wifi_seconds_lookup(today, state) if is_current_block else 0
     wifi_minutes_today = wifi_seconds / 60.0
 
     wfh_days = sum(
         1 for d in block.working_days
-        if get_status(d) == STATUS_WFH
+        if _status_lookup(d, state) == STATUS_WFH
     )
 
     return MonthMetrics(
