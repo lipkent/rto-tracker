@@ -130,19 +130,22 @@ def _find_or_create_spreadsheet(drive, sheets) -> str:
     return sid
 
 
-def _get_or_create_sheet(sheets, spreadsheet_id: str, title: str) -> tuple[int, bool]:
+def _get_or_create_sheet(spreadsheets_resource, spreadsheet_id: str, title: str) -> tuple[int, bool]:
     """
     Return (sheetId, is_new) for *title*, creating the tab only if it does not exist.
     Never deletes the sheet — updates in place to avoid redirecting the user.
     is_new = True means the sheet was just created (used to collapse groups on first load).
+
+    *spreadsheets_resource*: the caller's single `sheets.spreadsheets()` object,
+    reused rather than re-derived — see update_sheet() for why.
     """
-    meta = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    meta = spreadsheets_resource.get(spreadsheetId=spreadsheet_id).execute()
     for s in meta.get("sheets", []):
         if s["properties"]["title"] == title:
             return s["properties"]["sheetId"], False
 
     # Sheet does not exist yet — create it at index 0
-    resp = sheets.spreadsheets().batchUpdate(
+    resp = spreadsheets_resource.batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": [{"addSheet": {"properties": {"title": title, "index": 0}}}]},
     ).execute()
@@ -408,12 +411,15 @@ def _collapse_row_group_request(sheet_id: int, start_row: int, end_row: int) -> 
 
 
 
-def _get_existing_group_starts(sheets, spreadsheet_id: str, sheet_id: int) -> set:
+def _get_existing_group_starts(spreadsheets_resource, spreadsheet_id: str, sheet_id: int) -> set:
     """
     Return a set of startIndex values for all existing row groups on the sheet.
     Used to detect which month groups are new so only they get collapsed.
+
+    *spreadsheets_resource*: the caller's single `sheets.spreadsheets()` object,
+    reused rather than re-derived — see update_sheet() for why.
     """
-    meta = sheets.spreadsheets().get(
+    meta = spreadsheets_resource.get(
         spreadsheetId=spreadsheet_id,
         includeGridData=False,
     ).execute()
@@ -426,12 +432,15 @@ def _get_existing_group_starts(sheets, spreadsheet_id: str, sheet_id: int) -> se
     return starts
 
 
-def _clear_all_row_groups(sheets, spreadsheet_id: str, sheet_id: int):
+def _clear_all_row_groups(spreadsheets_resource, spreadsheet_id: str, sheet_id: int):
     """
     Remove all existing row groups by reading sheet metadata and deleting
     each group by its exact range in one batch. Deterministic — no loops.
+
+    *spreadsheets_resource*: the caller's single `sheets.spreadsheets()` object,
+    reused rather than re-derived — see update_sheet() for why.
     """
-    meta = sheets.spreadsheets().get(
+    meta = spreadsheets_resource.get(
         spreadsheetId=spreadsheet_id,
         includeGridData=False,
     ).execute()
@@ -453,7 +462,7 @@ def _clear_all_row_groups(sheets, spreadsheet_id: str, sheet_id: int):
             })
 
     if delete_requests:
-        sheets.spreadsheets().batchUpdate(
+        spreadsheets_resource.batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": delete_requests},
         ).execute()
@@ -482,19 +491,27 @@ def update_sheet(today_wifi_minutes: float | None = None):
         return
 
     try:
+        # sheets.spreadsheets() does NOT return a cached sub-resource — it
+        # constructs a brand-new googleapiclient Resource object (with all
+        # of its methods freshly regenerated) on every call. Call it ONCE
+        # here and reuse it for every operation below, instead of paying
+        # that cost up to 7x per push (confirmed via live memory profiling:
+        # ~170 MB/push from this alone — see plan doc for the full trace).
+        spreadsheets_resource = sheets.spreadsheets()
+
         spreadsheet_id = _find_or_create_spreadsheet(drive, sheets)
-        sheet_id, is_new = _get_or_create_sheet(sheets, spreadsheet_id, sheet_title)
+        sheet_id, is_new = _get_or_create_sheet(spreadsheets_resource, spreadsheet_id, sheet_title)
 
         # Only reorder if the year sheet is not already at index 0 —
         # calling updateSheetProperties unnecessarily causes a visible tab shuffle.
-        meta_check = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        meta_check = spreadsheets_resource.get(spreadsheetId=spreadsheet_id).execute()
         current_index = next(
             (s["properties"]["index"] for s in meta_check.get("sheets", [])
              if s["properties"]["sheetId"] == sheet_id),
             None,
         )
         if current_index != 0:
-            sheets.spreadsheets().batchUpdate(
+            spreadsheets_resource.batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": [{
                     "updateSheetProperties": {
@@ -513,7 +530,7 @@ def update_sheet(today_wifi_minutes: float | None = None):
         # values().update() from A1 always overwrites all existing cells.
         # Skipping values().clear() eliminates the empty-sheet window that
         # caused Google Sheets to redirect the user to the Info tab.
-        sheets.spreadsheets().values().update(
+        spreadsheets_resource.values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{sheet_title}!A1",
             valueInputOption="RAW",
@@ -533,7 +550,7 @@ def update_sheet(today_wifi_minutes: float | None = None):
             if row and "Summary" in str(row[0]):
                 fmt_requests.append(_bold_row_request(sheet_id, i))
 
-        sheets.spreadsheets().batchUpdate(
+        spreadsheets_resource.batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": fmt_requests},
         ).execute()
@@ -541,10 +558,10 @@ def update_sheet(today_wifi_minutes: float | None = None):
         # ── Row grouping (collapsible months) ────────────────────────────────
         # Read existing group start indices BEFORE clearing — used to detect
         # which months are new so only they get collapsed.
-        existing_starts = _get_existing_group_starts(sheets, spreadsheet_id, sheet_id)
+        existing_starts = _get_existing_group_starts(spreadsheets_resource, spreadsheet_id, sheet_id)
 
         # Clear all existing groups then re-add fresh ones
-        _clear_all_row_groups(sheets, spreadsheet_id, sheet_id)
+        _clear_all_row_groups(spreadsheets_resource, spreadsheet_id, sheet_id)
 
         group_requests = [
             _add_row_group_request(sheet_id, g["start_row"], g["end_row"])
@@ -552,7 +569,7 @@ def update_sheet(today_wifi_minutes: float | None = None):
         ]
 
         if group_requests:
-            sheets.spreadsheets().batchUpdate(
+            spreadsheets_resource.batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={"requests": group_requests},
             ).execute()
@@ -575,7 +592,7 @@ def update_sheet(today_wifi_minutes: float | None = None):
                     _collapse_row_group_request(sheet_id, g["start_row"], g["end_row"])
                     for g in new_groups
                 ]
-                sheets.spreadsheets().batchUpdate(
+                spreadsheets_resource.batchUpdate(
                     spreadsheetId=spreadsheet_id,
                     body={"requests": collapse_requests},
                 ).execute()
