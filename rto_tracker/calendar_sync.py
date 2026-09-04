@@ -69,10 +69,15 @@ def _fetch_events(service, calendar_id: str, since: date, until: date) -> list[d
     time_min = datetime(since.year, since.month, since.day, tzinfo=timezone.utc).isoformat()
     time_max = datetime(until.year, until.month, until.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
 
+    # service.events() constructs a fresh googleapiclient Resource object on
+    # every call (same behavior as sheets.spreadsheets() — see gdrive_export.py)
+    # — call it once outside the pagination loop instead of once per page.
+    events_resource = service.events()
+
     events = []
     page_token = None
     while True:
-        resp = service.events().list(
+        resp = events_resource.list(
             calendarId=calendar_id,
             timeMin=time_min,
             timeMax=time_max,
