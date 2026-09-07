@@ -103,8 +103,9 @@ def end_of_day_default(push_callback=None):
 def run_monitor(push_callback=None, stop_event=None):
     """
     Blocking loop: ticks every 60 s and fires push_callback every 10 minutes.
-    Push runs in a background daemon thread so it never blocks the tick loop —
-    ensuring the WiFi counter always increments exactly every 60 seconds.
+    Push is now synchronous to eliminate unbounded thread creation
+    (was creating 144 threads/day, causing ~1 GB memory accumulation per month).
+    Push is fast (~1-2s), so blocking for this brief period is acceptable.
     Pass a threading.Event to *stop_event* to gracefully stop.
     """
     import threading
@@ -112,10 +113,9 @@ def run_monitor(push_callback=None, stop_event=None):
         stop_event = threading.Event()
 
     def _fire_push():
-        """Fire push_callback in a background thread — non-blocking."""
+        """Fire push_callback synchronously."""
         if push_callback:
-            t = threading.Thread(target=push_callback, daemon=True, name="push")
-            t.start()
+            push_callback()
 
     tick_count = 0
     ticks_per_push = 600 // _TICK_SECONDS  # every 10 minutes

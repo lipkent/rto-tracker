@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from .calculations import MonthMetrics, calculate_month, current_month_block_for
 from .config import load_config
+from .state import load_state
 
 log = logging.getLogger(__name__)
 
@@ -109,14 +110,19 @@ def push_all_months():
     """Recalculate and push metrics for the current month and, if needed, the previous one."""
     today = date.today()
     year, month = current_month_block_for(today)
-    push_metrics(calculate_month(year, month, today))   # contains today — updates the Sheet
+
+    # Load state once and reuse for both calculate_month() calls below,
+    # instead of each one re-reading state.json from disk independently.
+    state = load_state()
+
+    push_metrics(calculate_month(year, month, today, state=state))   # contains today — updates the Sheet
 
     # Also push previous month if we're in the first week (split-week spillover).
     # update_sheet=False: this block doesn't contain today, so its wifi_minutes_today
     # would be 0 and would overwrite today's correct value in the Sheet.
     if today.day <= 7:
         prev = date(year, month, 1) - timedelta(days=1)
-        push_metrics(calculate_month(prev.year, prev.month, today), update_sheet=False)
+        push_metrics(calculate_month(prev.year, prev.month, today, state=state), update_sheet=False)
 
 
 def update_dashboard_month_filter():

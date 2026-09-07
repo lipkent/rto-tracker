@@ -94,6 +94,7 @@ def _scheduler_thread(stop_event: threading.Event):
     eod_done_today = None
     backfill_done_today = None
     last_known_block = None   # tracks (year, month) of current block
+    last_block_check_day = None   # tracks which day the block was last computed for
 
     while not stop_event.is_set():
         now = datetime.now()
@@ -121,15 +122,21 @@ def _scheduler_thread(stop_event: threading.Event):
         # Datadog dashboard month filter — update when the month block changes.
         # Uses current_month_block_for() so split-week days (e.g. June 29
         # assigned to July's block) are handled correctly.
-        try:
-            current_block = current_month_block_for(today)
-            if current_block != last_known_block:
-                log.info("Month block changed to %s-%02d — updating dashboard filter",
-                         current_block[0], current_block[1])
-                update_dashboard_month_filter()
-                last_known_block = current_block
-        except Exception as e:
-            log.error("Dashboard month filter update failed: %s", e)
+        # The block can only change once a day (at midnight), so only
+        # recompute it when *today* has advanced since the last check —
+        # avoids calling load_config() (and its Keychain subprocess spawn)
+        # every 30 seconds, forever.
+        if today != last_block_check_day:
+            try:
+                current_block = current_month_block_for(today)
+                if current_block != last_known_block:
+                    log.info("Month block changed to %s-%02d — updating dashboard filter",
+                             current_block[0], current_block[1])
+                    update_dashboard_month_filter()
+                    last_known_block = current_block
+                last_block_check_day = today
+            except Exception as e:
+                log.error("Dashboard month filter update failed: %s", e)
 
         # EOD default at 23:59
         if eod_done_today != today and current_time >= dtime(23, 59):

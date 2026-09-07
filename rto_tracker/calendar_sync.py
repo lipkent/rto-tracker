@@ -17,9 +17,24 @@ log = logging.getLogger(__name__)
 
 _GCAL_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
+_cached_service = None
+_cached_credentials = None
+
 
 def _build_service():
-    """Return an authenticated Google Calendar service, prompting OAuth if needed."""
+    """Return an authenticated Google Calendar service, prompting OAuth if needed.
+
+    Service objects are cached to avoid recreating them on every call.
+    Cached service is returned if credentials are still valid.
+    """
+    global _cached_service, _cached_credentials
+
+    if _cached_credentials and _cached_credentials.valid:
+        log.info("🔄 Calendar service cache hit")
+        return _cached_service
+
+    log.info("🆕 Calendar service cache miss — rebuilding")
+
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -45,17 +60,24 @@ def _build_service():
         with open(GCAL_TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
 
-    return build("calendar", "v3", credentials=creds)
+    _cached_credentials = creds
+    _cached_service = build("calendar", "v3", credentials=creds)
+    return _cached_service
 
 
 def _fetch_events(service, calendar_id: str, since: date, until: date) -> list[dict]:
     time_min = datetime(since.year, since.month, since.day, tzinfo=timezone.utc).isoformat()
     time_max = datetime(until.year, until.month, until.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
 
+    # service.events() constructs a fresh googleapiclient Resource object on
+    # every call (same behavior as sheets.spreadsheets() — see gdrive_export.py)
+    # — call it once outside the pagination loop instead of once per page.
+    events_resource = service.events()
+
     events = []
     page_token = None
     while True:
-        resp = service.events().list(
+        resp = events_resource.list(
             calendarId=calendar_id,
             timeMin=time_min,
             timeMax=time_max,

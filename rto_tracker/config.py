@@ -3,9 +3,27 @@
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Short-TTL cache for load_config() — config.json + Keychain rarely change,
+# but load_config() is called every ~30-60s from background loops (WiFi tick,
+# scheduler thread), each spawning a "security find-generic-password"
+# subprocess. Caching for a few seconds eliminates most of that churn while
+# still picking up changes made via `rto config set` / `rto setup` quickly
+# (those explicitly invalidate the cache below).
+_config_cache: dict | None = None
+_config_cache_time: float | None = None
+_CONFIG_CACHE_TTL = 15  # seconds
+
+
+def _invalidate_config_cache():
+    global _config_cache, _config_cache_time
+    _config_cache = None
+    _config_cache_time = None
+
 
 # ── macOS Keychain constants ──────────────────────────────────────────────────
 _KEYCHAIN_SERVICE     = "com.datadog.rto-tracker"
@@ -93,6 +111,7 @@ def set_api_key(api_key: str):
         raise RuntimeError(
             f"Failed to store API key in Keychain: {result.stderr.strip()}"
         )
+    _invalidate_config_cache()
     log.info("Datadog API key stored securely in macOS Keychain")
 
 
@@ -134,6 +153,7 @@ def set_app_key(app_key: str):
         raise RuntimeError(
             f"Failed to store App key in Keychain: {result.stderr.strip()}"
         )
+    _invalidate_config_cache()
     log.info("Datadog App key stored securely in macOS Keychain")
 
 
@@ -143,6 +163,13 @@ def ensure_dirs():
 
 
 def load_config() -> dict:
+    global _config_cache, _config_cache_time
+
+    now = time.monotonic()
+    if (_config_cache is not None and _config_cache_time is not None
+            and (now - _config_cache_time) < _CONFIG_CACHE_TTL):
+        return dict(_config_cache)   # shallow copy — callers may pop()/mutate top-level keys
+
     ensure_dirs()
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE) as f:
@@ -168,11 +195,15 @@ def load_config() -> dict:
 
     # Always inject the API key from Keychain at runtime
     cfg["datadog_api_key"] = get_api_key()
+
+    _config_cache = dict(cfg)
+    _config_cache_time = now
     return cfg
 
 
 def save_config(cfg: dict):
     ensure_dirs()
+    _invalidate_config_cache()
     # Extract API key before saving — store in Keychain, not on disk
     api_key = cfg.pop("datadog_api_key", None)
     if api_key:
